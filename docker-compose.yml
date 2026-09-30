@@ -1,0 +1,118 @@
+services:
+
+  # ---------- Bases de datos: una por servicio, sin compartir ----------
+
+  user-db:
+    image: postgres:16-alpine
+    container_name: taskflow-user-db
+    environment:
+      POSTGRES_DB: userdb
+      POSTGRES_USER: postgres
+      POSTGRES_PASSWORD: postgres
+    ports:
+      - "5432:5432"
+    volumes:
+      - user-db-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U postgres -d userdb"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  project-db:
+    image: mysql:8.0
+    container_name: taskflow-project-db
+    environment:
+      MYSQL_DATABASE: projectdb
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3307:3306"
+    volumes:
+      - project-db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  task-db:
+    image: mysql:8.0
+    container_name: taskflow-task-db
+    environment:
+      MYSQL_DATABASE: taskdb
+      MYSQL_ROOT_PASSWORD: root
+    ports:
+      - "3308:3306"
+    volumes:
+      - task-db-data:/var/lib/mysql
+    healthcheck:
+      test: ["CMD", "mysqladmin", "ping", "-h", "localhost", "-uroot", "-proot"]
+      interval: 5s
+      timeout: 5s
+      retries: 15
+
+  # ---------- Microservicios ----------
+
+  user-service:
+    build: ./user-service
+    container_name: taskflow-user-service
+    environment:
+      DB_URL: jdbc:postgresql://user-db:5432/userdb
+      DB_USERNAME: postgres
+      DB_PASSWORD: postgres
+      JWT_SECRET: ${JWT_SECRET:-taskflow-portfolio-super-secret-key-change-me-0123456789}
+    ports:
+      - "8081:8081"
+    depends_on:
+      user-db:
+        condition: service_healthy
+
+  project-service:
+    build: ./project-service
+    container_name: taskflow-project-service
+    environment:
+      DB_URL: jdbc:mysql://project-db:3306/projectdb?createDatabaseIfNotExist=true
+      DB_USERNAME: root
+      DB_PASSWORD: root
+      JWT_SECRET: ${JWT_SECRET:-taskflow-portfolio-super-secret-key-change-me-0123456789}
+    ports:
+      - "8082:8082"
+    depends_on:
+      project-db:
+        condition: service_healthy
+
+  task-service:
+    build: ./task-service
+    container_name: taskflow-task-service
+    environment:
+      DB_URL: jdbc:mysql://task-db:3306/taskdb?createDatabaseIfNotExist=true
+      DB_USERNAME: root
+      DB_PASSWORD: root
+      JWT_SECRET: ${JWT_SECRET:-taskflow-portfolio-super-secret-key-change-me-0123456789}
+      USER_SERVICE_URL: http://user-service:8081
+    ports:
+      - "8083:8083"
+    depends_on:
+      task-db:
+        condition: service_healthy
+      user-service:
+        condition: service_started
+
+  api-gateway:
+    build: ./api-gateway
+    container_name: taskflow-api-gateway
+    environment:
+      USER_SERVICE_URL: http://user-service:8081
+      PROJECT_SERVICE_URL: http://project-service:8082
+      TASK_SERVICE_URL: http://task-service:8083
+    ports:
+      - "8080:8080"
+    depends_on:
+      - user-service
+      - project-service
+      - task-service
+
+volumes:
+  user-db-data:
+  project-db-data:
+  task-db-data:
