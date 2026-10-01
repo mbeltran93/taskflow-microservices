@@ -125,10 +125,12 @@ cd taskflow-microservices
 docker compose up --build
 ```
 
-Esto levanta 8 containers: `user-db` (Postgres), `project-db` y `task-db`
+Esto levanta 7 containers: `user-db` (Postgres), `project-db` y `task-db`
 (MySQL), los 3 microservicios y el `api-gateway`. Los healthchecks de las
 bases de datos hacen que cada servicio espere a que su base este lista antes
-de arrancar.
+de arrancar; ademas, los 4 servicios de aplicacion tienen `restart:
+on-failure` para recuperarse solos si arrancan en la breve ventana en que
+MySQL se reinicia tras inicializar su datadir (ver "Limitaciones conocidas").
 
 Puertos expuestos en el host:
 
@@ -183,15 +185,48 @@ Si en el paso 5 se manda un `assigneeId` que no existe (ej. `999999`),
 task-service responde `400 Bad Request` sin asignar nada, porque la llamada
 a user-service devuelve 404.
 
+## Coleccion de Postman
+
+`postman_collection.json` (raiz del repo) cubre el mismo flujo end-to-end
+que el bloque de curl de arriba, pero pensado para abrir en Postman y
+ejecutar paso a paso o con el botón "Run collection":
+
+1. **Importar**: Postman -> *Import* -> seleccionar `postman_collection.json`.
+2. La coleccion trae sus propias variables (`base_url=http://localhost:8080`,
+   `email`, `password`, `token`, `userId`, `projectId`, `taskId`) - no hace
+   falta crear un Environment aparte.
+3. Con el stack arriba (`docker compose up --build`), correr las carpetas en
+   orden:
+   - **01 - Auth**: registra un usuario y hace login. Un *test script* en la
+     request de Login guarda el JWT devuelto en la variable de coleccion
+     `token` automaticamente (`pm.collectionVariables.set('token', ...)`);
+     las requests siguientes lo usan como `Authorization: Bearer {{token}}`
+     sin que haya que copiarlo a mano.
+   - **02 - Projects**: crea, consulta, lista y actualiza un proyecto (CRUD).
+   - **03 - Tasks**: crea una tarea, la consulta, la asigna a un usuario que
+     existe (200) y a uno que no existe (400, caso que valida contra
+     user-service), y cambia su estado.
+   - **04 - Cleanup**: borra el proyecto creado.
+4. Todas las requests pasan por el **api-gateway** (`localhost:8080`), nunca
+   por el puerto directo de cada microservicio.
+5. Se puede correr headless con [Newman](https://github.com/postmanlabs/newman):
+   `npx newman run postman_collection.json` (23 assertions, todas en verde
+   contra el stack real de Docker al momento de escribir esto).
+
 ## Tests
 
 Cada servicio tiene tests unitarios (JUnit 5 + Mockito, mockeando
 repositorios y el cliente HTTP) y tests de integracion (`@SpringBootTest` +
 `MockMvc`, con una base H2 en memoria) que ejercitan el flujo real
-controller -> service -> repository con el filtro JWT activo.
+controller -> service -> repository con el filtro JWT activo. Ademas,
+`user-service` tiene un test de integracion con **Testcontainers**
+(`UserPostgresTestcontainersTest`) que levanta un Postgres 16 real en un
+contenedor Docker (via `@ServiceConnection`) en vez de H2, para ejercitar el
+mismo flujo contra el driver y el dialecto de Postgres de verdad. Requiere
+Docker corriendo.
 
 ```bash
-cd user-service    && mvn test   # 8 tests
+cd user-service    && mvn test   # 9 tests (incluye el de Testcontainers)
 cd project-service  && mvn test   # 7 tests
 cd task-service     && mvn test   # 9 tests
 cd api-gateway      && mvn test   # 2 tests (arranque + registro de rutas)
@@ -200,7 +235,19 @@ cd api-gateway      && mvn test   # 2 tests (arranque + registro de rutas)
 En `task-service`, el test de integracion reemplaza `UserClient` por un
 mock (`@MockBean`) para no depender de que user-service este corriendo; el
 comportamiento real del cliente HTTP (incluyendo el caso "usuario no
-existe") esta cubierto por el test unitario de `TaskService`.
+existe") esta cubierto por el test unitario de `TaskService` y, end-to-end,
+por el caso 400 de la coleccion de Postman.
+
+## Versiones
+
+Spring Boot **3.5.16** (release train 3.5.x, la ultima linea 3.x con soporte
+activo) y, en `api-gateway`, Spring Cloud **2025.0.3** (el release train que
+acompaña a Boot 3.5.x). Se actualizo desde 3.3.2 / Spring Cloud 2023.0.2
+(mediados de 2024) durante esta revision. De paso, `spring-cloud-starter-gateway`
+se reemplazo por `spring-cloud-starter-gateway-server-webflux` (el artifact
+que reemplaza al anterior, que esta deprecado desde Spring Cloud 2025.0.x) y
+la config de rutas se movio a la clave nueva
+`spring.cloud.gateway.server.webflux.routes` en `application.yml`.
 
 ## Limitaciones conocidas
 
@@ -223,14 +270,18 @@ existe") esta cubierto por el test unitario de `TaskService`.
 - **`ddl-auto: update`**: para un proyecto de portafolio se uso
   actualizacion automatica del esquema en vez de migraciones versionadas
   (Flyway/Liquibase).
-- **Verificacion de `docker compose up`**: el codigo compila, todos los
-  tests (26 en total) pasan y `docker compose config` valida el archivo sin
-  errores, pero no se pudo ejecutar `docker compose up` de punta a punta en
-  esta maquina porque el disco `C:` del entorno de build se quedo sin
-  espacio libre (Docker Desktop no llega a arrancar). Para probarlo:
-  liberar espacio en `C:` (o mover el disco de datos de Docker Desktop a
-  otra unidad desde *Settings > Resources > Advanced*) y correr
-  `docker compose up --build` seguido del flujo de curl de arriba.
+- **`docker compose up` verificado de punta a punta**: con espacio libre en
+  disco y Docker Desktop andando, se corrio `docker compose up --build`
+  completo y el flujo real de curl/Postman contra los 4 servicios. Apareció
+  (y se arreglo) un bug real de primera corrida: el healthcheck de MySQL
+  (`mysqladmin ping`) puede reportar "healthy" durante el breve reinicio
+  interno que MySQL hace al inicializar su datadir por primera vez: si
+  `project-service`/`task-service` se conectan justo en esa ventana, Spring
+  Boot aborta el arranque con "Connection refused" y, sin restart policy, el
+  contenedor queda muerto para siempre aunque la base este lista un segundo
+  despues. Se agrego `restart: on-failure:5` a los 4 microservicios en
+  `docker-compose.yml` (ver comentario ahi) para que se recuperen solos de
+  esa condicion de carrera.
 
 ## Estructura del repo
 
