@@ -1,0 +1,13 @@
+# Configuracion no sensible, compartida por los 4 servicios. Los nombres
+# user-service/project-service/task-service resuelven via el DNS interno de
+# Kubernetes (todos en el namespace "taskflow"), el mismo rol que cumplen los
+# nombres de servicio de docker-compose.yml en el entorno local.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: taskflow-config
+  namespace: taskflow
+data:
+  USER_SERVICE_URL: "http://user-service:8081"
+  PROJECT_SERVICE_URL: "http://project-service:8082"
+  TASK_SERVICE_URL: "http://task-service:8083"

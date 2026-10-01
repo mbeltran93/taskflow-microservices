@@ -6,12 +6,16 @@ import com.taskflow.userservice.dto.RegisterRequest;
 import com.taskflow.userservice.dto.UserResponse;
 import com.taskflow.userservice.service.UserService;
 import jakarta.validation.Valid;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 import org.springframework.web.bind.annotation.*;
 
 @RestController
 @RequestMapping("/api/users")
 public class UserController {
+
+    private static final Logger log = LoggerFactory.getLogger(UserController.class);
 
     private final UserService userService;
 
@@ -32,10 +36,14 @@ public class UserController {
 
     /**
      * Consultado por task-service para validar que un assigneeId existe
-     * antes de asignarle una tarea.
+     * antes de asignarle una tarea. El log de abajo, junto con el log de
+     * UserClient en task-service, es la evidencia de que el X-Trace-Id viaja
+     * de punta a punta entre los dos servicios (mismo traceId en el MDC de
+     * ambos, visible en logging.pattern.console).
      */
     @GetMapping("/{id}")
     public UserResponse getById(@PathVariable Long id) {
+        log.info("Validando existencia de usuario id={} (pedido por otro servicio)", id);
         return userService.getById(id);
     }
 }

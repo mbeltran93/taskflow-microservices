@@ -7,12 +7,16 @@ import com.taskflow.taskservice.exception.TaskNotFoundException;
 import com.taskflow.taskservice.model.Task;
 import com.taskflow.taskservice.model.TaskStatus;
 import com.taskflow.taskservice.repository.TaskRepository;
+import org.slf4j.Logger;
+import org.slf4j.LoggerFactory;
 import org.springframework.stereotype.Service;
 
 import java.util.List;
 
 @Service
 public class TaskService {
+
+    private static final Logger log = LoggerFactory.getLogger(TaskService.class);
 
     private final TaskRepository taskRepository;
     private final UserClient userClient;
@@ -49,6 +53,7 @@ public class TaskService {
      * entre microservicios que pide el enunciado del portafolio.
      */
     public TaskResponse assign(Long taskId, Long assigneeId, String authorizationHeader) {
+        log.info("Asignando tarea taskId={} a assigneeId={}", taskId, assigneeId);
         Task task = findOrThrow(taskId);
         userClient.getUserById(assigneeId, authorizationHeader);
         task.setAssigneeId(assigneeId);

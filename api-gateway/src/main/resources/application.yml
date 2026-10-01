@@ -27,3 +27,12 @@ management:
     web:
       exposure:
         include: health,info,gateway
+
+# A diferencia de los otros 3 servicios (Servlet, un thread fijo por
+# request), el gateway corre sobre WebFlux: el pipeline reactivo puede saltar
+# de thread entre operadores, asi que el MDC (ThreadLocal) no es confiable
+# aca. TraceIdGlobalFilter por eso loguea el traceId explicito en el mensaje
+# en vez de depender solo del patron de logging con %X{traceId}.
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] %logger{36} - %msg%n"

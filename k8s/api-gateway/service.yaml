@@ -1,0 +1,19 @@
+# Unico servicio expuesto fuera del cluster: en GKE, type: LoadBalancer
+# aprovisiona automaticamente un Network Load Balancer de GCP con IP publica.
+# user/project/task-service quedan ClusterIP (solo alcanzables dentro del
+# cluster), igual que en docker-compose solo el gateway publica 8080 al host.
+apiVersion: v1
+kind: Service
+metadata:
+  name: api-gateway
+  namespace: taskflow
+  labels:
+    app: api-gateway
+spec:
+  type: LoadBalancer
+  selector:
+    app: api-gateway
+  ports:
+    - port: 80
+      targetPort: 8080
+      protocol: TCP

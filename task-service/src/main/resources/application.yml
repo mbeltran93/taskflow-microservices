@@ -30,3 +30,10 @@ management:
     web:
       exposure:
         include: health,info
+
+# El %X{traceId} toma el valor que TraceIdFilter pone en el MDC por request,
+# asi que cada linea de log queda correlacionada con el X-Trace-Id de punta a
+# punta entre servicios (ver tracing/TraceIdFilter.java).
+logging:
+  pattern:
+    console: "%d{HH:mm:ss.SSS} %-5level [%thread] traceId=%X{traceId:-sin-traceId} %logger{36} - %msg%n"

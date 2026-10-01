@@ -1,0 +1,23 @@
+# Escalado independiente: user-service escala segun su propia carga de CPU
+# sin afectar el resto de los servicios. Esto es justamente lo que un
+# monolito no puede hacer (ahi escala todo junto, aunque solo una parte este
+# bajo presion).
+apiVersion: autoscaling/v2
+kind: HorizontalPodAutoscaler
+metadata:
+  name: user-service
+  namespace: taskflow
+spec:
+  scaleTargetRef:
+    apiVersion: apps/v1
+    kind: Deployment
+    name: user-service
+  minReplicas: 2
+  maxReplicas: 6
+  metrics:
+    - type: Resource
+      resource:
+        name: cpu
+        target:
+          type: Utilization
+          averageUtilization: 70

@@ -1,0 +1,75 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: task-service
+  namespace: taskflow
+  labels:
+    app: task-service
+spec:
+  # task-service recibe mas trafico que los otros dos (cada asignacion de
+  # tarea ademas dispara una llamada saliente a user-service), por eso arranca
+  # con mas replicas que user-service/project-service. Es exactamente el tipo
+  # de ajuste por servicio que esta arquitectura permite y un monolito no.
+  replicas: 3
+  selector:
+    matchLabels:
+      app: task-service
+  template:
+    metadata:
+      labels:
+        app: task-service
+    spec:
+      containers:
+        - name: task-service
+          # Reemplazar por la imagen publicada en Artifact Registry, p.ej.:
+          # us-central1-docker.pkg.dev/<PROJECT_ID>/taskflow/task-service:<tag>
+          image: taskflow/task-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8083
+          env:
+            - name: DB_URL
+              # En GKE: Cloud SQL (MySQL) via el Cloud SQL Auth Proxy, igual
+              # que en project-service.
+              value: "jdbc:mysql://127.0.0.1:3306/taskdb?createDatabaseIfNotExist=true"
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: taskflow-secrets
+                  key: TASK_DB_USERNAME
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: taskflow-secrets
+                  key: TASK_DB_PASSWORD
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: taskflow-secrets
+                  key: JWT_SECRET
+            - name: USER_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: taskflow-config
+                  key: USER_SERVICE_URL
+          resources:
+            requests:
+              cpu: "250m"
+              memory: "384Mi"
+            limits:
+              cpu: "600m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            initialDelaySeconds: 25
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8083
+            initialDelaySeconds: 40
+            periodSeconds: 15
+            failureThreshold: 6

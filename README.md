@@ -1,5 +1,7 @@
 # TaskFlow - Microservicios
 
+[![CI](https://github.com/mbeltran93/taskflow-microservices/actions/workflows/ci.yml/badge.svg)](https://github.com/mbeltran93/taskflow-microservices/actions/workflows/ci.yml)
+
 Proyecto de portafolio: una version reducida de una app de gestion de
 tareas/proyectos (tipo Trello/Jira), construida como un sistema de
 **microservicios independientes** con Spring Boot, cada uno con su propia
@@ -113,6 +115,58 @@ microservicio es dueno total de su propio modelo de datos.
   menos `/register` y `/login`.
 - El secreto se pasa por la variable de entorno `JWT_SECRET`, identica en
   los tres servicios (ver `docker-compose.yml`).
+
+## Trazabilidad distribuida (X-Trace-Id)
+
+Con 4 servicios separados, el problema real al debuggear en produccion no es
+leer el log de uno: es seguir **un pedido puntual a traves de los 4**. Por
+eso cada servicio tiene un filtro de trazas (`tracing/TraceIdFilter.java` en
+user/project/task-service, `tracing/TraceIdGlobalFilter.java` en
+api-gateway):
+
+- Si la request entrante ya trae el header `X-Trace-Id`, lo reusa. Si no,
+  genera uno nuevo (UUID).
+- En `user-service`, `project-service` y `task-service` (Servlet, un thread
+  fijo por request) el traceId se pone en el **MDC de SLF4J**, asi que
+  `logging.pattern.console` (en cada `application.yml`) lo imprime en
+  **todas** las lineas de log de esa request automaticamente, sin tocar cada
+  `log.info(...)` uno por uno.
+- `task-service` lo **propaga** en la llamada saliente real: cuando
+  `TaskService.assign()` llama a `UserClient.getUserById()` para validar el
+  assignee contra user-service, `UserClient` lee el traceId del MDC (misma
+  request, mismo thread) y lo manda como header `X-Trace-Id` en esa llamada
+  HTTP saliente.
+- `api-gateway` (Spring Cloud Gateway, WebFlux) hace lo mismo al reenviar
+  cualquier request a los servicios downstream: agrega el header
+  `X-Trace-Id` a la request mutada antes de rutearla. Ahi el MDC no es
+  confiable (el pipeline reactivo puede cambiar de thread entre
+  operadores), asi que el filtro loguea el traceId explicito en el mensaje
+  en vez de depender solo de `%X{traceId}` (el codigo lo documenta en
+  `TraceIdGlobalFilter`).
+- Los 4 servicios devuelven `X-Trace-Id` en la respuesta, para poder pedir
+  "los logs de este pedido" por su id.
+
+**Prueba real de punta a punta** (gateway -> task-service -> user-service,
+disparando el caso real de asignar una tarea), con `X-Trace-Id:
+demo-trace-1790878328` puesto a mano en el curl:
+
+```
+# log de task-service
+traceId=demo-trace-1790878328 ... TraceIdFilter - Request recibido: PATCH /api/tasks/1/assign
+traceId=demo-trace-1790878328 ... TaskService    - Asignando tarea taskId=1 a assigneeId=2
+traceId=demo-trace-1790878328 ... UserClient     - Llamando a user-service para validar assigneeId=2 (propagando X-Trace-Id=demo-trace-1790878328)
+traceId=demo-trace-1790878328 ... TraceIdFilter - Request completado: PATCH /api/tasks/1/assign -> status=200
+
+# log de user-service, MISMO traceId, para la llamada que dispara task-service
+traceId=demo-trace-1790878328 ... TraceIdFilter    - Request recibido: GET /api/users/2
+traceId=demo-trace-1790878328 ... UserController   - Validando existencia de usuario id=2 (pedido por otro servicio)
+traceId=demo-trace-1790878328 ... TraceIdFilter    - Request completado: GET /api/users/2 -> status=200
+```
+
+El mismo `traceId` aparece en ambos servicios para la misma operacion de
+negocio, confirmando que viajo de punta a punta (gateway -> task-service ->
+user-service) sin que nadie lo reenvie "a mano" en el curl del cliente mas
+alla del primer header.
 
 ## Como correr todo
 
@@ -238,6 +292,43 @@ comportamiento real del cliente HTTP (incluyendo el caso "usuario no
 existe") esta cubierto por el test unitario de `TaskService` y, end-to-end,
 por el caso 400 de la coleccion de Postman.
 
+## Kubernetes / GCP (GKE)
+
+La carpeta [`k8s/`](k8s/README.md) tiene manifiestos de Kubernetes (un
+`Deployment` + `Service` + `HorizontalPodAutoscaler` por servicio, mas
+`Namespace`/`ConfigMap`/`Secret`) pensados para **GKE**, con el detalle de
+por que una arquitectura de microservicios se beneficia especificamente de
+Kubernetes (escalado independiente por servicio, resiliencia por servicio,
+despliegues independientes) en [`k8s/README.md`](k8s/README.md).
+
+No se desplego nada a GCP real desde este entorno (no hay cuenta/proyecto
+configurado aca): los manifiestos se validaron localmente con
+
+```bash
+kubectl apply --dry-run=client -f k8s/ --recursive
+```
+
+contra un cluster `kind` descartable creado solo para esa validacion (sin
+cluster no hay forma de que `kubectl` resuelva los `apiVersion`/`kind` de
+cada recurso). Las 15 piezas se reconocen y validan sin errores.
+
+## CI/CD
+
+[`.github/workflows/ci.yml`](.github/workflows/ci.yml) corre en cada push
+(y en cada PR):
+
+1. **Tests**: `mvn test` de los 4 modulos Maven (`user-service`,
+   `project-service`, `task-service`, `api-gateway`) en paralelo, uno por
+   job de la matrix. Sube los reportes de Surefire como artifact aunque
+   algun test falle.
+2. **Build de imagenes Docker**: build de las 4 imagenes (`docker/
+   build-push-action`, `push: false`) para validar que cada `Dockerfile`
+   compila de punta a punta. No se pushea a ningun registry (no hay
+   credenciales de Artifact Registry/Docker Hub configuradas en este repo).
+3. **CodeQL**: analisis estatico de seguridad para Java sobre los 4 modulos
+   (`github/codeql-action`, `build-mode: manual` ya que no hay un `pom.xml`
+   raiz que los agregue), resultados en la pestaña *Security* del repo.
+
 ## Versiones
 
 Spring Boot **3.5.16** (release train 3.5.x, la ultima linea 3.x con soporte
@@ -287,7 +378,9 @@ la config de rutas se movio a la clave nueva
 
 ```
 taskflow-microservices/
+├── .github/workflows/ci.yml   (tests + build de imagenes + CodeQL)
 ├── docker-compose.yml
+├── k8s/                        (manifiestos de Kubernetes/GKE, ver k8s/README.md)
 ├── user-service/       (Spring Boot, Postgres)
 ├── project-service/    (Spring Boot, MySQL)
 ├── task-service/       (Spring Boot, MySQL, cliente REST a user-service)

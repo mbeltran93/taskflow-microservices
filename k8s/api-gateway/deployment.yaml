@@ -1,0 +1,62 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: api-gateway
+  namespace: taskflow
+  labels:
+    app: api-gateway
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: api-gateway
+  template:
+    metadata:
+      labels:
+        app: api-gateway
+    spec:
+      containers:
+        - name: api-gateway
+          # Reemplazar por la imagen publicada en Artifact Registry, p.ej.:
+          # us-central1-docker.pkg.dev/<PROJECT_ID>/taskflow/api-gateway:<tag>
+          image: taskflow/api-gateway:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8080
+          env:
+            - name: USER_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: taskflow-config
+                  key: USER_SERVICE_URL
+            - name: PROJECT_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: taskflow-config
+                  key: PROJECT_SERVICE_URL
+            - name: TASK_SERVICE_URL
+              valueFrom:
+                configMapKeyRef:
+                  name: taskflow-config
+                  key: TASK_SERVICE_URL
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "320Mi"
+            limits:
+              cpu: "500m"
+              memory: "448Mi"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 20
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8080
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 6

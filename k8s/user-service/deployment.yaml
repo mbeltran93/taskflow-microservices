@@ -1,0 +1,68 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: user-service
+  namespace: taskflow
+  labels:
+    app: user-service
+spec:
+  replicas: 2
+  selector:
+    matchLabels:
+      app: user-service
+  template:
+    metadata:
+      labels:
+        app: user-service
+    spec:
+      containers:
+        - name: user-service
+          # Reemplazar por la imagen publicada en Artifact Registry, p.ej.:
+          # us-central1-docker.pkg.dev/<PROJECT_ID>/taskflow/user-service:<tag>
+          image: taskflow/user-service:latest
+          imagePullPolicy: IfNotPresent
+          ports:
+            - containerPort: 8081
+          env:
+            - name: DB_URL
+              # En GKE: Cloud SQL (Postgres) via el Cloud SQL Auth Proxy
+              # (sidecar o Workload Identity), no un Postgres dentro del
+              # cluster. localhost:5432 asume el proxy corriendo como
+              # sidecar en este mismo Pod.
+              value: "jdbc:postgresql://127.0.0.1:5432/userdb"
+            - name: DB_USERNAME
+              valueFrom:
+                secretKeyRef:
+                  name: taskflow-secrets
+                  key: USER_DB_USERNAME
+            - name: DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: taskflow-secrets
+                  key: USER_DB_PASSWORD
+            - name: JWT_SECRET
+              valueFrom:
+                secretKeyRef:
+                  name: taskflow-secrets
+                  key: JWT_SECRET
+          resources:
+            requests:
+              cpu: "200m"
+              memory: "384Mi"
+            limits:
+              cpu: "500m"
+              memory: "512Mi"
+          readinessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 25
+            periodSeconds: 10
+            failureThreshold: 6
+          livenessProbe:
+            httpGet:
+              path: /actuator/health
+              port: 8081
+            initialDelaySeconds: 40
+            periodSeconds: 15
+            failureThreshold: 6
